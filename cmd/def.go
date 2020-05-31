@@ -12,14 +12,14 @@ import (
 )
 
 const (
-	QUEUE_MAX_SIZE		= 100
+	QUEUE_MAX_SIZE = 100
 )
 
 var (
-	If             = flag.String("if", "\\Device\\NPF_{149515B8-3CA8-4B88-9BF3-E329219F2336}", "Interface to listen for")
+	If             = flag.String("if", "", "Interface to listen for")
 	Debug          = flag.Bool("debug", false, "Debug mode")
 	SessionTimeout = flag.Duration("timeout", 30*time.Second, "Session tracking timeout")
-	Listen		= flag.String("listen", "0.0.0.0:9999", "HTTP Listen configuration")
+	Listen         = flag.String("listen", "0.0.0.0:9999", "HTTP Listen configuration")
 )
 
 var WS = websocket.Upgrader{

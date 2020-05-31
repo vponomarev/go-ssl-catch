@@ -20,10 +20,23 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
 
+	// Check if interface is specified. Print usage if no and exit
+	if *If == "" {
+		printUsage()
+		return
+	}
+
 	// Scan for device list
 	devList, err := pcap.FindAllDevs()
+	ok := false
 	for _, dev := range devList {
-		fmt.Println("IFName: ", dev.Name, "IFAddr: ", dev.Addresses)
+		if dev.Name == *If {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		log.WithFields(log.Fields{"type": "startup", "interface": *If}).Fatal("Unknown interface")
 	}
 
 	handle, err := pcap.OpenLive(*If, 1500, true, pcap.BlockForever)
@@ -31,6 +44,8 @@ func main() {
 		log.WithFields(log.Fields{"type": "startup", "interface": *If}).Fatal("Error listening interface")
 		return
 	}
+	log.WithFields(log.Fields{"type": "startup", "interface": *If}).Warn("Starting listening on interface")
+
 	pSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	pChan := pSource.Packets()
 

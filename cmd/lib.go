@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"github.com/google/gopacket/pcap"
 	log "github.com/sirupsen/logrus"
 	"net"
 	"time"
@@ -79,21 +82,45 @@ func (p *Parser) SessionTimeouter() {
 func (p *Parser) QueueReceiver() {
 	for {
 		select {
-			case r := <- p.DataCH:
-				log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "optCount": r.OptCnt}).Info("SSL Handshake found")
+		case r := <-p.DataCH:
+			log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "optCount": r.OptCnt}).Info("SSL Handshake found")
 
-				// Push data into queue
-				p.Queue.RLock()
-				skipCnt := 0
-				if len(p.Queue.List) > QUEUE_MAX_SIZE {
-					skipCnt++
-				}
-				p.Queue.List = append(p.Queue.List[skipCnt:], r)
-				p.Queue.Id++
-				p.Queue.RUnlock()
+			// Push data into queue
+			p.Queue.RLock()
+			skipCnt := 0
+			if len(p.Queue.List) > QUEUE_MAX_SIZE {
+				skipCnt++
+			}
+			p.Queue.List = append(p.Queue.List[skipCnt:], r)
+			p.Queue.Id++
+			p.Queue.RUnlock()
 
-		case <- p.Context.Done():
-				return
+		case <-p.Context.Done():
+			return
 		}
 	}
+}
+
+func printUsage() {
+	fmt.Printf("----\nList of available interfaces:\n")
+
+	// Scan for device list
+	devList, err := pcap.FindAllDevs()
+	if err != nil {
+		log.Errorf("Error retrieving interface list: ", err)
+		return
+	}
+
+	for _, dev := range devList {
+		var ipList []net.IP
+		for _, ia := range dev.Addresses {
+			ipList = append(ipList, ia.IP)
+		}
+
+		fmt.Printf("* Interface: [%s] IP: %v\n", dev.Name, ipList)
+	}
+
+	fmt.Printf("----\ngo-ssl-cache usage:\n")
+	flag.PrintDefaults()
+
 }
