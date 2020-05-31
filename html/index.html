@@ -1,0 +1,76 @@
+<html>
+<head>
+    <title>SSL Handshake log</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css" integrity="sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm" crossorigin="anonymous">
+</head>
+<body>
+
+<script src="https://code.jquery.com/jquery-3.2.1.slim.min.js" integrity="sha384-KJ3o2DKtIkvYIK3UENzmM7KCkRr/rE9/Qpg6aAZGJwFDMVNA/GpGFF93hXpG5KkN" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js" integrity="sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q" crossorigin="anonymous"></script>
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js" integrity="sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl" crossorigin="anonymous"></script>
+
+<table class="table table-sm">
+    <thead>
+    <tr>
+        <td width="150">SRC IP</td>
+        <td width="100">SRC Port</td>
+        <td width="150">Dest IP</td>
+        <td width="100">Dest Port</td>
+        <td width="50">Opt count</td>
+        <td>&nbsp;</td>
+    </tr>
+    </thead>
+    <tbody id="bodyData">
+    </tbody>
+</table>
+
+<pre id="output"></pre>
+
+<script type="application/javascript">
+    function doConnectWS() {
+        let socket = new WebSocket("ws://{{.ServerHost}}/ws");
+        let output = document.getElementById("output");
+        output.innerHTML = "Status: Connecting...\n";
+
+        socket.onopen = function () {
+            output.innerHTML = "Status: Connected\n" + output.innerHTML;
+        }
+        socket.onmessage = function (e) {
+            msg = JSON.parse(e.data)
+            output.innerHTML = "Server: " + e.data + "\n" + output.innerHTML;
+
+            // Truncate number of rows to 10 MAX
+            let vr = output.innerHTML.split("\n");
+            if (vr.length > 5) {
+                vr.length = 5;
+                output.innerHTML = vr.join("\n");
+            }
+
+            console.log(msg);
+
+             for (let e of msg.keys()) {
+                let v = msg[e]
+                    console.log(v);
+                    $("#bodyData").append("<tr><td>" + v["dest"]["ip"] + "</td><td>" + v["dest"]["port"] + "</td><td>" + v["src"]["ip"] + "</td><td>" + v["src"]["port"] + "</td><td>" + v["optCnt"] + "</td></tr>");
+            }
+
+            // Delete expired lines
+            $("#bodyData [doDelete=1]").remove();
+        };
+        socket.onclose = function () {
+            output.innerHTML += "Status: DISCONNECTED\n";
+
+            // Reconnect in 5 sec
+            setTimeout(doConnectWS, 5000);
+        }
+    }
+
+    doConnectWS();
+</script>
+
+
+</body>
+
+</html>
