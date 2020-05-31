@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
@@ -10,13 +11,11 @@ import (
 	"os/signal"
 )
 
-
-
-
 func main() {
 	ctx := context.Background()
-
 	ctxWithCancel, cancelFunction := context.WithCancel(ctx)
+
+	flag.Parse()
 
 	log.SetOutput(os.Stdout)
 	log.SetLevel(log.DebugLevel)
