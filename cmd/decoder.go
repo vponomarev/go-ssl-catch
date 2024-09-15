@@ -5,6 +5,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	log "github.com/sirupsen/logrus"
+	"reflect"
 	"time"
 )
 
@@ -17,14 +18,49 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 		return
 	}
 
+	ip4, _ := ip4Layer.(*layers.IPv4)
+
 	// Detect TCP Layer
 	tcpLayer := pkt.Layer(layers.LayerTypeTCP)
 	if tcpLayer == nil {
+		// Check for UDP
+		udpLayer := pkt.Layer(layers.LayerTypeUDP)
+		if udpLayer == nil {
+			return
+		}
+
+		udp, _ := udpLayer.(*layers.UDP)
+		if udp.SrcPort == 53 {
+			//fmt.Println("UDP catch:", ip4.SrcIP, udp.SrcPort, "=>", ip4.DstIP, udp.DstPort)
+
+			appLayer := pkt.ApplicationLayer()
+			if appLayer == nil {
+				// TODO: Add error handler
+				// Strange layer error, skip packet
+				return
+			}
+
+			if reflect.TypeOf(appLayer).String() != "*layers.DNS" {
+				return
+			}
+
+			dns := appLayer.(*layers.DNS)
+			if dns.OpCode == layers.DNSOpCodeQuery && dns.ResponseCode == layers.DNSResponseCodeNoErr && dns.ANCount > 0 {
+				for _, ans := range dns.Answers {
+					//fmt.Println(ans)
+					if ans.Type == layers.DNSTypeA {
+						//fmt.Println("DNS RESP:", string(dns.Questions[0].Name), "=>", string(ans.Name), ans.IP.String())
+						log.WithFields(log.Fields{"type": "dns-response", "domain": string(dns.Questions[0].Name), "answer": string(ans.Name), "answer-ip": ans.IP.String()}).Info()
+					}
+				}
+			}
+
+		}
+
 		// Skip packet, we don't need it
 		return
 	}
 
-	ip4, _ := ip4Layer.(*layers.IPv4)
 	tcp, _ := tcpLayer.(*layers.TCP)
 
 	// Session key
@@ -99,13 +135,14 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 	}
 
 	// Got packet, detect SSL
-	rok = detectHandshake(appLayer.Payload())
+	rok, sni := detectHandshake(appLayer.Payload())
 
 	if rok {
 		r = ResData{
 			Src:    s.Src,
 			Dest:   s.Dest,
 			OptCnt: len(s.TCPOpts),
+			SNI:    sni,
 		}
 	} else {
 		if *Debug {
@@ -117,4 +154,3 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 
 	return
 }
-

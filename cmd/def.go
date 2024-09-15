@@ -62,9 +62,10 @@ type Parser struct {
 }
 
 type ResData struct {
-	Src    Addr `json:"src"`
-	Dest   Addr `json:"dest"`
-	OptCnt int  `json:"optCnt"`
+	Src    Addr   `json:"src"`
+	Dest   Addr   `json:"dest"`
+	OptCnt int    `json:"optCnt"`
+	SNI    string `json:"SNI"`
 }
 
 type ResQueue struct {

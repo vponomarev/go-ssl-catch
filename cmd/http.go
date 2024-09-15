@@ -84,15 +84,15 @@ func (p *Parser) WSwriter(ws *websocket.Conn) {
 			}
 		case <-dataTicker.C:
 			// Check for LastUpdate
-			p.Queue.RLock()
+			p.Queue.Lock()
 			if p.Queue.Id > lastID {
 				l := 0
 				if (p.Queue.Id - lastID) < uint32(len(p.Queue.List)) {
-					l = len(p.Queue.List) - int(p.Queue.Id - lastID)
+					l = len(p.Queue.List) - int(p.Queue.Id-lastID)
 				}
-				data :=p.Queue.List[l:]
+				data := p.Queue.List[l:]
 				lastID = p.Queue.Id
-				p.Queue.RUnlock()
+				p.Queue.Unlock()
 
 				output, err := json.Marshal(data)
 				if err != nil {
@@ -105,7 +105,7 @@ func (p *Parser) WSwriter(ws *websocket.Conn) {
 					return
 				}
 			} else {
-				p.Queue.RUnlock()
+				p.Queue.Unlock()
 			}
 		}
 	}
