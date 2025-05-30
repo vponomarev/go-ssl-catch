@@ -18,7 +18,7 @@ const (
 var (
 	If             = flag.String("if", "", "Interface to listen for")
 	Debug          = flag.Bool("debug", false, "Debug mode")
-	SessionTimeout = flag.Duration("timeout", 30*time.Second, "Session tracking timeout")
+	SessionTimeout = flag.Duration("timeout", 120*time.Second, "Session tracking timeout")
 	Listen         = flag.String("listen", "0.0.0.0:9999", "HTTP Listen configuration")
 )
 
@@ -40,7 +40,11 @@ type Session struct {
 
 	RXInitSeq uint32
 	RXData    []byte
-	T         time.Time
+	TimeStart time.Time
+	TimeLast  time.Time
+
+	IsTracked bool
+	SNI       string
 }
 type SessionTracker struct {
 	List map[string]Session
@@ -62,6 +66,7 @@ type Parser struct {
 }
 
 type ResData struct {
+	Key    string `json:"key"`
 	Src    Addr   `json:"src"`
 	Dest   Addr   `json:"dest"`
 	OptCnt int    `json:"optCnt"`

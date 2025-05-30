@@ -9,6 +9,48 @@ import (
 	"time"
 )
 
+func (p *Parser) DetectDNSResp(pkt gopacket.Packet) {
+	// Check for UDP
+	udpLayer := pkt.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+
+	udp, _ := udpLayer.(*layers.UDP)
+	if udp.SrcPort == 53 {
+		//fmt.Println("UDP catch:", ip4.SrcIP, udp.SrcPort, "=>", ip4.DstIP, udp.DstPort)
+
+		appLayer := pkt.ApplicationLayer()
+		if appLayer == nil {
+			// TODO: Add error handler
+			// Strange layer error, skip packet
+			return
+		}
+
+		if reflect.TypeOf(appLayer).String() != "*layers.DNS" {
+			return
+		}
+
+		dns := appLayer.(*layers.DNS)
+		if dns == nil {
+			// incorrect DNS
+			return
+		}
+
+		if dns.OpCode == layers.DNSOpCodeQuery && dns.ResponseCode == layers.DNSResponseCodeNoErr && dns.ANCount > 0 {
+			for _, ans := range dns.Answers {
+				//fmt.Println(ans)
+				if ans.Type == layers.DNSTypeA {
+					//fmt.Println("DNS RESP:", string(dns.Questions[0].Name), "=>", string(ans.Name), ans.IP.String())
+					log.WithFields(log.Fields{"type": "dns-response", "domain": string(dns.Questions[0].Name), "answer": string(ans.Name), "answer-ip": ans.IP.String()}).Info()
+				}
+			}
+		}
+
+	}
+
+}
+
 func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err error) {
 
 	// Detect IPv4 Layer
@@ -23,39 +65,7 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 	// Detect TCP Layer
 	tcpLayer := pkt.Layer(layers.LayerTypeTCP)
 	if tcpLayer == nil {
-		// Check for UDP
-		udpLayer := pkt.Layer(layers.LayerTypeUDP)
-		if udpLayer == nil {
-			return
-		}
-
-		udp, _ := udpLayer.(*layers.UDP)
-		if udp.SrcPort == 53 {
-			//fmt.Println("UDP catch:", ip4.SrcIP, udp.SrcPort, "=>", ip4.DstIP, udp.DstPort)
-
-			appLayer := pkt.ApplicationLayer()
-			if appLayer == nil {
-				// TODO: Add error handler
-				// Strange layer error, skip packet
-				return
-			}
-
-			if reflect.TypeOf(appLayer).String() != "*layers.DNS" {
-				return
-			}
-
-			dns := appLayer.(*layers.DNS)
-			if dns.OpCode == layers.DNSOpCodeQuery && dns.ResponseCode == layers.DNSResponseCodeNoErr && dns.ANCount > 0 {
-				for _, ans := range dns.Answers {
-					//fmt.Println(ans)
-					if ans.Type == layers.DNSTypeA {
-						//fmt.Println("DNS RESP:", string(dns.Questions[0].Name), "=>", string(ans.Name), ans.IP.String())
-						log.WithFields(log.Fields{"type": "dns-response", "domain": string(dns.Questions[0].Name), "answer": string(ans.Name), "answer-ip": ans.IP.String()}).Info()
-					}
-				}
-			}
-
-		}
+		p.DetectDNSResp(pkt)
 
 		// Skip packet, we don't need it
 		return
@@ -76,7 +86,8 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 		s := Session{
 			RXInitSeq: tcp.Seq,
 			RXData:    nil,
-			T:         time.Now(),
+			TimeStart: time.Now(),
+			TimeLast:  time.Now(),
 			Src: Addr{
 				IP:   ip4.SrcIP,
 				Port: tcp.SrcPort,
@@ -85,9 +96,16 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 				IP:   ip4.DstIP,
 				Port: tcp.DstPort,
 			},
-			TCPOpts: tcp.Options,
+			TCPOpts:   tcp.Options,
+			IsTracked: true,
 		}
 
+		// TODO: Scan all ports, but now we process only tcp/443
+		if tcp.DstPort != 443 {
+			return
+		}
+
+		// Start session tracking
 		p.RegisterSession(key, s)
 
 		if *Debug {
@@ -99,15 +117,35 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 	// Check if we track this flow
 	s, ok := p.GetSession(key)
 
-	// Skip if flow is not tracked
+	// Skip if flow is not registered
 	if !ok {
 		return
 	}
 
 	// Stop session tracking on RST packet on any direction
 	if tcp.RST {
-		// TODO: Optionally notify about strage behaviour
+		// TODO: Optionally notify about strange behaviour
+		dur := time.Since(s.TimeStart)
+		durMS := dur.Milliseconds()
+		log.WithFields(log.Fields{"type": "sessionRemoveRST", "sni": s.SNI, "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+
 		p.RemoveSession(key)
+		return
+	}
+
+	// Stop session tracking on FIN packet on any direction
+	if tcp.FIN {
+		dur := time.Since(s.TimeStart)
+		durMS := dur.Milliseconds()
+		log.WithFields(log.Fields{"type": "sessionRemoveFIN", "sni": s.SNI, "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+
+		p.RemoveSession(key)
+		return
+	}
+
+	// Skip rest part if tracking is disabled
+	if !s.IsTracked {
+		p.UpdateSessionLastSeen(key)
 		return
 	}
 
@@ -129,7 +167,10 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 	if len(appLayer.Payload()) < 5 {
 		// SSL packet header is too short, possibly Window size games. This is not normal.
 		// Stop analysis
-		// TODO: Possibly inform upstream layer about this issue
+		dur := time.Since(s.TimeStart)
+		durMS := dur.Milliseconds()
+		log.WithFields(log.Fields{"type": "sessionRemoveShortPayload", "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+
 		p.RemoveSession(key)
 		return
 	}
@@ -139,18 +180,21 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 
 	if rok {
 		r = ResData{
+			Key:    key,
 			Src:    s.Src,
 			Dest:   s.Dest,
 			OptCnt: len(s.TCPOpts),
 			SNI:    sni,
 		}
+		p.SetSessionSNI(key, sni)
 	} else {
-		if *Debug {
-			log.WithFields(log.Fields{"type": "removeSession", "key": key}).Debug("Session is not SSL session")
-		}
+		//if *Debug {
+		//	log.WithFields(log.Fields{"type": "removeSession", "key": key}).Debug("Session is not SSL session")
+		//}
 	}
-	// Remove session from tracking
-	p.RemoveSession(key)
+	// Stop packet tracking for this session (but don't stop tracking session itself)
+	p.StopTracking(key)
+	// p.RemoveSession(key)
 
 	return
 }

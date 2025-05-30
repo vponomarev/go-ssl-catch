@@ -39,7 +39,7 @@ func main() {
 		log.WithFields(log.Fields{"type": "startup", "interface": *If}).Fatal("Unknown interface")
 	}
 
-	handle, err := pcap.OpenLive(*If, 1500, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(*If, 9000, true, pcap.BlockForever)
 	if err != nil {
 		log.WithFields(log.Fields{"type": "startup", "interface": *If}).Fatal("Error listening interface")
 		return
@@ -67,10 +67,12 @@ func main() {
 	// TODO: Error handling
 	go p.serveHTTP()
 
+	pNum := 0
 	// Infinite loop
 	for {
 		select {
 		case pkt := <-pChan:
+			pNum++
 			r, ok, err := p.DecodePacket(pkt)
 			if ok {
 				// Send result into processing channel

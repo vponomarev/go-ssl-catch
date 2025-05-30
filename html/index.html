@@ -19,7 +19,6 @@
         <td width="150">Dest IP</td>
         <td width="100">Dest Port</td>
         <td width="350">SNI</td>
-        <td width="50">Opt count</td>
         <td>&nbsp;</td>
     </tr>
     </thead>
@@ -54,7 +53,7 @@
              for (let e of msg.keys()) {
                 let v = msg[e]
                     console.log(v);
-                    $("#bodyData").append("<tr><td>" + v["dest"]["ip"] + "</td><td>" + v["dest"]["port"] + "</td><td>" + v["src"]["ip"] + "</td><td>" + v["src"]["port"] + "</td><td>" + v["SNI"] + "</td><td>" + v["optCnt"] + "</td></tr>");
+                    $("#bodyData").append("<tr><td>" + v["src"]["ip"] + "</td><td>" + v["src"]["port"] + "</td><td>" + v["dest"]["ip"] + "</td><td>" + v["dest"]["port"] + "</td><td>" + v["SNI"] + "</td></tr>");
             }
 
             // Delete expired lines

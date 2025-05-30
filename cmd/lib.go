@@ -184,6 +184,39 @@ func (p *Parser) GetSession(key string) (s Session, ok bool) {
 	return
 }
 
+func (p *Parser) StopTracking(key string) (ok bool) {
+	p.Sessions.Lock()
+	s, ok := p.Sessions.List[key]
+	if ok {
+		s.IsTracked = false
+		p.Sessions.List[key] = s
+	}
+	p.Sessions.Unlock()
+	return
+}
+
+func (p *Parser) UpdateSessionLastSeen(key string) (ok bool) {
+	p.Sessions.Lock()
+	s, ok := p.Sessions.List[key]
+	if ok {
+		s.TimeLast = time.Now()
+		p.Sessions.List[key] = s
+	}
+	p.Sessions.Unlock()
+	return
+}
+
+func (p *Parser) SetSessionSNI(key string, sni string) (ok bool) {
+	p.Sessions.Lock()
+	s, ok := p.Sessions.List[key]
+	if ok {
+		s.SNI = sni
+		p.Sessions.List[key] = s
+	}
+	p.Sessions.Unlock()
+	return
+}
+
 func (p *Parser) SessionTimeouter() {
 	ticker := time.NewTicker(10 * time.Second)
 	for {
@@ -191,7 +224,10 @@ func (p *Parser) SessionTimeouter() {
 		case <-ticker.C:
 			p.Sessions.Lock()
 			for sk, sv := range p.Sessions.List {
-				if time.Now().After(sv.T.Add(*SessionTimeout)) {
+				if time.Now().After(sv.TimeLast.Add(*SessionTimeout)) {
+					dur := time.Since(sv.TimeStart)
+					durMS := dur.Milliseconds()
+					log.WithFields(log.Fields{"type": "sessionRemoveTimeout", "sni": sv.SNI, "key": sk, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
 					delete(p.Sessions.List, sk)
 				}
 			}
@@ -207,7 +243,7 @@ func (p *Parser) QueueReceiver() {
 	for {
 		select {
 		case r := <-p.DataCH:
-			log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "optCount": r.OptCnt, "SNI": r.SNI}).Info("SSL Handshake found")
+			log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "SNI": r.SNI}).Info("SSL Handshake found")
 
 			// Push data into queue
 			p.Queue.Lock()
