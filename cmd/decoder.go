@@ -42,7 +42,7 @@ func (p *Parser) DetectDNSResp(pkt gopacket.Packet) {
 				//fmt.Println(ans)
 				if ans.Type == layers.DNSTypeA {
 					//fmt.Println("DNS RESP:", string(dns.Questions[0].Name), "=>", string(ans.Name), ans.IP.String())
-					log.WithFields(log.Fields{"type": "dns-response", "domain": string(dns.Questions[0].Name), "answer": string(ans.Name), "answer-ip": ans.IP.String()}).Info()
+					log.WithFields(log.Fields{"type": "dns-response", "domain": string(dns.Questions[0].Name), "answer": string(ans.Name), "answer-ip": ans.IP.String()}).Debug()
 				}
 			}
 		}
@@ -127,7 +127,7 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 		// TODO: Optionally notify about strange behaviour
 		dur := time.Since(s.TimeStart)
 		durMS := dur.Milliseconds()
-		log.WithFields(log.Fields{"type": "sessionRemoveRST", "sni": s.SNI, "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+		log.WithFields(log.Fields{"type": "sessionRemove", "reason": "RST", "sni": s.SNI, "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Info()
 
 		p.RemoveSession(key)
 		return
@@ -137,7 +137,7 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 	if tcp.FIN {
 		dur := time.Since(s.TimeStart)
 		durMS := dur.Milliseconds()
-		log.WithFields(log.Fields{"type": "sessionRemoveFIN", "sni": s.SNI, "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+		log.WithFields(log.Fields{"type": "sessionRemove", "src": s.Src.String(), "dest": s.Dest.String(), "reason": "FIN", "sni": s.SNI, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Info()
 
 		p.RemoveSession(key)
 		return
@@ -169,7 +169,7 @@ func (p *Parser) DecodePacket(pkt gopacket.Packet) (r ResData, rok bool, err err
 		// Stop analysis
 		dur := time.Since(s.TimeStart)
 		durMS := dur.Milliseconds()
-		log.WithFields(log.Fields{"type": "sessionRemoveShortPayload", "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+		log.WithFields(log.Fields{"type": "sessionRemove", "reason": "ShortPayload", "key": key, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Info()
 
 		p.RemoveSession(key)
 		return

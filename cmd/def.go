@@ -7,6 +7,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/gorilla/websocket"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -30,6 +31,10 @@ var WS = websocket.Upgrader{
 type Addr struct {
 	IP   net.IP         `json:"ip"`
 	Port layers.TCPPort `json:"port"`
+}
+
+func (addr *Addr) String() string {
+	return addr.IP.String() + ":" + strconv.Itoa(int(addr.Port))
 }
 
 // Session descriptor

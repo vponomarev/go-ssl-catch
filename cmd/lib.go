@@ -227,7 +227,7 @@ func (p *Parser) SessionTimeouter() {
 				if time.Now().After(sv.TimeLast.Add(*SessionTimeout)) {
 					dur := time.Since(sv.TimeStart)
 					durMS := dur.Milliseconds()
-					log.WithFields(log.Fields{"type": "sessionRemoveTimeout", "sni": sv.SNI, "key": sk, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Debug("Session closed")
+					log.WithFields(log.Fields{"type": "sessionRemove", "reason": "Timeout", "sni": sv.SNI, "key": sk, "duration": fmt.Sprintf("%d.%03d", durMS/1000, durMS%1000)}).Info()
 					delete(p.Sessions.List, sk)
 				}
 			}
@@ -243,7 +243,7 @@ func (p *Parser) QueueReceiver() {
 	for {
 		select {
 		case r := <-p.DataCH:
-			log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "SNI": r.SNI}).Info("SSL Handshake found")
+			log.WithFields(log.Fields{"type": "event", "srcIP": r.Src.IP.String(), "srcPort": uint16(r.Src.Port), "dstIP": r.Dest.IP.String(), "dstPort": uint16(r.Dest.Port), "SNI": r.SNI}).Debug("SSL Handshake found")
 
 			// Push data into queue
 			p.Queue.Lock()

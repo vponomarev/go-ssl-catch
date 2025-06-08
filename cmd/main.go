@@ -18,7 +18,7 @@ func main() {
 	flag.Parse()
 
 	log.SetOutput(os.Stdout)
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 
 	// Check if interface is specified. Print usage if no and exit
 	if *If == "" {
