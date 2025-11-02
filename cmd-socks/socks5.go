@@ -40,7 +40,7 @@ func (s *Socks5) AcceptConnection() {
 	// Обработка запроса SOCKS5
 	err := s.ProcessRequest()
 	if err != nil {
-		log.Printf("[%d] Request failed: %v", s.UniqNo, err)
+		log.Printf("[%d] Request failed [%s:%d :%v]: %v", s.UniqNo, s.TargetHost, s.TargetPort, s.IsTargetIP, err)
 		return
 	}
 	defer s.targetConn.Close()
