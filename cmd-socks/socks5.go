@@ -1,0 +1,387 @@
+package main
+
+import (
+	//"bytes"
+	"encoding/binary"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"sync"
+	"time"
+)
+
+type Socks5 struct {
+	UniqNo uint32
+
+	TargetHost string
+	TargetPort uint16
+	IsTargetIP bool
+
+	connectedAt time.Time
+
+	clientConn net.Conn
+	targetConn net.Conn
+
+	bytesTX int
+	bytesRX int
+	sync.RWMutex
+}
+
+func (s *Socks5) AcceptConnection() {
+	defer s.clientConn.Close()
+
+	// Аутентификация SOCKS5
+	if err := s.AuthRequest(); err != nil {
+		log.Printf("[%d] Authentication failed: %v", s.UniqNo, err)
+		return
+	}
+
+	// Обработка запроса SOCKS5
+	err := s.ProcessRequest()
+	if err != nil {
+		log.Printf("[%d] Request failed: %v", s.UniqNo, err)
+		return
+	}
+	defer s.targetConn.Close()
+
+	// log.Printf("[%d] Tunnel established, starting fragmentation...", s.UniqNo)
+
+	// Запускаем forward с фрагментацией
+	//go forwardWithFragmentation(s.clientConn, s.targetConn, "client->target")
+	go s.StreamForward()
+	s.StreamReverse()
+
+	// Finalize metrics
+	tx, rx := s.GetMetrics()
+	duration := time.Since(s.connectedAt)
+	log.Printf("[%d] Sent=%d, Received=%d (during %v sec) (%s:%v)\n", s.UniqNo, tx, rx, duration.Seconds(), s.TargetHost, s.TargetPort)
+
+	// forwardWithFragmentation(s.targetConn, s.clientConn, "target->client")
+}
+
+func (s *Socks5) AuthRequest() error {
+	// Читаем методы аутентификации
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(s.clientConn, header); err != nil {
+		return err
+	}
+
+	if header[0] != socksVersion {
+		return fmt.Errorf("unsupported SOCKS version: %d", header[0])
+	}
+
+	nMethods := header[1]
+	methods := make([]byte, nMethods)
+	if _, err := io.ReadFull(s.clientConn, methods); err != nil {
+		return err
+	}
+
+	// Поддерживаем только NO AUTH
+	response := []byte{socksVersion, 0}
+	_, err := s.clientConn.Write(response)
+	return err
+}
+
+func (s *Socks5) ProcessRequest() error {
+	request := make([]byte, 4)
+	if _, err := io.ReadFull(s.clientConn, request); err != nil {
+		return err
+	}
+
+	if request[0] != socksVersion {
+		return fmt.Errorf("unsupported SOCKS version: %d", request[0])
+	}
+
+	// Читаем адрес назначения
+	var host string
+	var port uint16
+
+	switch request[3] {
+	case 0x01: // IPv4
+		ip := make([]byte, 4)
+		if _, err := io.ReadFull(s.clientConn, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+		s.TargetHost = host
+		s.IsTargetIP = true
+	case 0x03: // Domain name
+		lenBuf := make([]byte, 1)
+		if _, err := io.ReadFull(s.clientConn, lenBuf); err != nil {
+			return err
+		}
+		domain := make([]byte, lenBuf[0])
+		if _, err := io.ReadFull(s.clientConn, domain); err != nil {
+			return err
+		}
+		host = string(domain)
+		s.TargetHost = host
+	case 0x04: // IPv6
+		return fmt.Errorf("IPv6 not supported")
+	default:
+		return fmt.Errorf("unsupported address type: %d", request[3])
+	}
+
+	// Читаем порт
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(s.clientConn, portBuf); err != nil {
+		return err
+	}
+	port = binary.BigEndian.Uint16(portBuf)
+	s.TargetPort = uint16(port)
+
+	// Устанавливаем соединение с целевым сервером
+	targetAddr := fmt.Sprintf("%s:%d", host, port)
+	targetConn, err := net.Dial("tcp", targetAddr)
+	if err != nil {
+		// Отправляем ошибку клиенту
+		response := []byte{socksVersion, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+		s.clientConn.Write(response)
+		return err
+	}
+
+	// Отправляем успешный ответ
+	localAddr := targetConn.LocalAddr().(*net.TCPAddr)
+	response := make([]byte, 10)
+	response[0] = socksVersion
+	response[1] = 0x00 // Success
+	response[2] = 0x00 // Reserved
+	response[3] = 0x01 // IPv4
+	copy(response[4:8], localAddr.IP.To4())
+	binary.BigEndian.PutUint16(response[8:10], uint16(localAddr.Port))
+
+	if _, err := s.clientConn.Write(response); err != nil {
+		targetConn.Close()
+		return err
+	}
+
+	s.targetConn = targetConn
+	s.connectedAt = time.Now()
+
+	log.Printf("[%d][%s] [%s => %s] CONNECT to: %s:%v",
+		s.UniqNo,
+		s.clientConn.RemoteAddr().String(),
+		s.targetConn.LocalAddr().String(),
+		s.targetConn.RemoteAddr().String(),
+		s.TargetHost, s.TargetPort)
+	return nil
+}
+
+func (s *Socks5) UpdateMetrics(tx, rx int) {
+	s.Lock()
+	s.bytesTX += tx
+	s.bytesRX += rx
+	s.Unlock()
+}
+
+func (s *Socks5) GetMetrics() (tx, rx int) {
+	s.RLock()
+	defer s.RUnlock()
+	return s.bytesTX, s.bytesRX
+}
+
+func (s *Socks5) StreamReverse() {
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	cntBytes := 0
+
+	for {
+		n, err := s.targetConn.Read(buffer)
+		cntBytes += n
+		s.UpdateMetrics(0, n)
+		if err != nil {
+			if err != io.EOF {
+				//log.Printf("[%d] Read error [reverse]: %v", s.UniqNo, err)
+			} else {
+				//log.Printf("[%d][rev] bytes: %v", s.UniqNo, cntBytes)
+			}
+			break
+		}
+
+		if _, err := s.clientConn.Write(buffer[0:n]); err != nil {
+			//log.Printf("[%d] Write error [reverse]: %v", s.UniqNo, err)
+			break
+		}
+	}
+}
+
+func (s *Socks5) DoInject(data []byte) {
+	// Inject fake packets
+	// if (s.TargetHost == "i.ytimg.com" || (s.TargetHost == "vpnc.ru")) && s.TargetPort == 443 {
+	ok, rName := IsFakeStrategy(s.TargetHost)
+	if ok && s.TargetPort == 443 {
+		time.Sleep(30 * time.Millisecond)
+		if ok, si := CaptureSessionInfo(s.targetConn); ok {
+			// fmt.Println("** captured ISN: ", si.ISN)
+
+			ln := len(data)
+			if ln > 1024 {
+				ln = 1024
+			}
+
+			haveSNI, sni, offset := DecodeSSLHandshake(data)
+
+			// Заменить последний символ доменного имени
+			if haveSNI {
+				fp := append([]byte(nil), data[0:ln]...)
+				fmt.Printf(rName)
+				copy(fp[offset:offset+len(sni)], []byte(rName))
+				//if ln > offset+len(sni) {
+				//	fp[offset+len(sni)-1] = 'x'
+				//}
+				err, pkt := PrepareFakePacket(si, uint8(*paramTTL), fp)
+				if err == nil {
+					SerSentBuffer <- pkt
+
+					log.Printf("[%d] Injected FAKE packet (%d bytes)", s.UniqNo, len(data))
+					time.Sleep(30 * time.Millisecond)
+				} else {
+					fmt.Println("Error generating packet", err)
+				}
+			}
+		}
+	}
+}
+
+func (s *Socks5) StreamForward() {
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	cntBytes := 0
+
+	for {
+		n, err := s.clientConn.Read(buffer)
+
+		if cntBytes == 0 && n > 0 && err == nil {
+			s.DoInject(buffer[0:n])
+		}
+
+		cntBytes += n
+		s.UpdateMetrics(n, 0)
+		if err != nil {
+			if err != io.EOF {
+				//log.Printf("[%d] Read error [fwd]: %v", s.UniqNo, err)
+			} else {
+				//log.Printf("[%d][fwd] bytes: %v", s.UniqNo, cntBytes)
+			}
+			break
+		}
+
+		if _, err := s.targetConn.Write(buffer[0:n]); err != nil {
+			//log.Printf("[%d] Write error [fwd]: %v", s.UniqNo, err)
+			break
+		}
+	}
+}
+
+func forwardWithFragmentation(src, dst net.Conn, direction string) {
+	buffer := make([]byte, 32*1024) // 32KB buffer
+	fragmenter := NewFragmenter(initialFragSize)
+
+	// wait for 30 ms
+	time.Sleep(30 * time.Millisecond)
+
+	//ok, si := CaptureSessionInfo(src, dst)
+	//if ok && false {
+	//	fmt.Println("** captured ISN: ", si.ISN)
+	//
+	//	if si.DstPort == 443 {
+	//		err, pkt := PrepareFakePacket(si, uint8(*paramTTL), []byte("GET / HTTP/1.0\nHost: www.gosuslugi.ru\n\n"))
+	//		if err == nil {
+	//			SerSentBuffer <- pkt
+	//
+	//			time.Sleep(30 * time.Millisecond)
+	//		} else {
+	//			fmt.Println("Error generating packet", err)
+	//		}
+	//
+	//	}
+	//}
+
+	for {
+		n, err := src.Read(buffer)
+		if err != nil {
+			if err != io.EOF {
+				log.Printf("Read error (%s): %v", direction, err)
+			}
+			break
+		}
+
+		if n > 0 {
+			data := buffer[:n]
+
+			if fragmenter.ShouldFragment() {
+				// Используем фрагментацию
+				if err := fragmenter.WriteFragmented(dst, data); err != nil {
+					log.Printf("Write fragmented error (%s): %v", direction, err)
+					break
+				}
+			} else {
+				// Обычная отправка
+				if _, err := dst.Write(data); err != nil {
+					log.Printf("Write error (%s): %v", direction, err)
+					break
+				}
+			}
+		}
+	}
+}
+
+func NewFragmenter(totalLimit int) *Fragmenter {
+	return &Fragmenter{
+		enabled:    true,
+		sentBytes:  0,
+		totalLimit: totalLimit,
+	}
+}
+
+func (f *Fragmenter) ShouldFragment() bool {
+	return f.enabled && f.sentBytes < f.totalLimit
+}
+
+func (f *Fragmenter) WriteFragmented(conn net.Conn, data []byte) error {
+	totalWritten := 0
+
+	for totalWritten < len(data) && f.ShouldFragment() {
+		chunkSize := fragmentSize
+		remaining := f.totalLimit - f.sentBytes
+
+		if chunkSize > remaining {
+			chunkSize = remaining
+		}
+
+		if totalWritten+chunkSize > len(data) {
+			chunkSize = len(data) - totalWritten
+		}
+
+		if chunkSize == 0 {
+			break
+		}
+
+		chunk := data[totalWritten : totalWritten+chunkSize]
+		n, err := conn.Write(chunk)
+		if err != nil {
+			return err
+		}
+
+		// Искусственная задержка между фрагментами
+		time.Sleep(10 * time.Millisecond)
+
+		totalWritten += n
+		f.sentBytes += n
+
+		// log.Printf("Sent fragment: %d bytes (total fragmented: %d/%d)",
+		//	n, f.sentBytes, f.totalLimit)
+	}
+
+	// Если остались данные после фрагментации, отправляем обычным способом
+	if totalWritten < len(data) {
+		f.enabled = false // Отключаем фрагментацию
+		remaining := data[totalWritten:]
+		_, err := conn.Write(remaining)
+		if err != nil {
+			return err
+		}
+		log.Printf("Sent remaining %d bytes without fragmentation", len(remaining))
+	}
+
+	return nil
+}
