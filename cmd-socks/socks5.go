@@ -131,6 +131,13 @@ func (s *Socks5) ProcessRequest() error {
 	port = binary.BigEndian.Uint16(portBuf)
 	s.TargetPort = uint16(port)
 
+	if s.TargetHost == "0.0.0.0" {
+		// Отправляем ошибку клиенту
+		response := []byte{socksVersion, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+		s.clientConn.Write(response)
+		return fmt.Errorf("forbinned connect to %v", s.TargetHost)
+	}
+
 	// Устанавливаем соединение с целевым сервером
 	targetAddr := fmt.Sprintf("%s:%d", host, port)
 	targetConn, err := net.Dial("tcp", targetAddr)
