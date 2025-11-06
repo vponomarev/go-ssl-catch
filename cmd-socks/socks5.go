@@ -18,6 +18,8 @@ type Socks5 struct {
 	TargetPort uint16
 	IsTargetIP bool
 
+	ConnTargetIP string
+
 	connectedAt time.Time
 
 	clientConn net.Conn
@@ -55,7 +57,11 @@ func (s *Socks5) AcceptConnection() {
 	// Finalize metrics
 	tx, rx := s.GetMetrics()
 	duration := time.Since(s.connectedAt)
-	log.Printf("[%d] Sent=%d, Received=%d (during %v sec) (%s:%v)\n", s.UniqNo, tx, rx, duration.Seconds(), s.TargetHost, s.TargetPort)
+	if rx > 0 {
+		log.Printf("[%d] Sent=%d, Received=%d (during %v sec) (%s:%v) (%s)\n", s.UniqNo, tx, rx, duration.Seconds(), s.TargetHost, s.TargetPort, s.ConnTargetIP)
+	} else {
+		log.Printf("[%d] Sent=%d, Received=%d (during %v sec) (%s:%v) (%s) [BLOCK-CANDIDATE]\n", s.UniqNo, tx, rx, duration.Seconds(), s.TargetHost, s.TargetPort, s.ConnTargetIP)
+	}
 
 	// forwardWithFragmentation(s.targetConn, s.clientConn, "target->client")
 }
@@ -135,7 +141,7 @@ func (s *Socks5) ProcessRequest() error {
 		// Отправляем ошибку клиенту
 		response := []byte{socksVersion, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 		s.clientConn.Write(response)
-		return fmt.Errorf("forbinned connect to %v", s.TargetHost)
+		return fmt.Errorf("forbidden connect to %v", s.TargetHost)
 	}
 
 	// Устанавливаем соединение с целевым сервером
@@ -164,6 +170,7 @@ func (s *Socks5) ProcessRequest() error {
 	}
 
 	s.targetConn = targetConn
+	s.ConnTargetIP = s.targetConn.RemoteAddr().(*net.TCPAddr).IP.String()
 	s.connectedAt = time.Now()
 
 	log.Printf("[%d][%s] [%s => %s] CONNECT to: %s:%v",

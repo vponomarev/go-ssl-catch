@@ -1,0 +1,18 @@
+port: 1080
+interface: "\Device\NPF_{DE608B98-5E46-423A-93F5-B24DC48DCC6F}"
+ttl: 7
+
+strategy:
+  - name: proxy-de
+    action: "socks5://172.31.1.100:8888"
+  - name: fake
+    action: "fake://"
+
+
+actions:
+  - name: "Send to DE proxy"
+    list: "list-de.txt"
+    strategy: proxy-de
+  - name: "Fake packet"
+    list: "list-fake.txt"
+    strategy: fake
